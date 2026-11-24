@@ -15,7 +15,7 @@ Dusk for Windows is the Windows version of [Dusk for Mac](https://github.com/s-a
 
 - Warmth from 6500K down to 500K, with seven presets: Energy 6000K, Daylight 5000K, Evening 3400K, Night 2700K, Late 1900K, Deep 1200K, Midnight 500K
 - Software dimming down to 5%
-- Flicker-free mode: laptop backlight and DDC/CI monitors held at 100%, dimming done in software
+- Flicker-free mode (on by default): laptop backlight and DDC/CI monitors held at 100%, dimming done in software
 - Night schedule, launch at login, re-applies after sleep, unlock and display changes
 - Same panel as the Mac app: warmth dial, brightness bars, preset chips, settings page, soft click sounds
 

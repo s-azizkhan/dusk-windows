@@ -11,7 +11,7 @@ public class Settings
     public bool Enabled { get; set; } = true;
     public double Kelvin { get; set; } = 3400;
     public double Brightness { get; set; } = 1;
-    public bool FlickerFree { get; set; }
+    public bool FlickerFree { get; set; } = true;
     public bool Sounds { get; set; } = true;
     public bool ScheduleOn { get; set; }
     public int StartHour { get; set; } = 20;
@@ -25,14 +25,17 @@ public class Settings
     public static Settings Load()
     {
         Settings s;
+        var fresh = !File.Exists(File_);
         try { s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(File_)) ?? new(); }
         catch { s = new(); }
+        // First run: flicker-free is on, so start the software dim at the current laptop backlight, not brighter.
+        if (fresh && Backlight.LaptopGet() is byte b) s.Brightness = b / 100.0;
         // A hand-edited or corrupt file must not crash the UI or black out the screen.
         s.Kelvin = Math.Clamp(s.Kelvin, 500, 6500);
         s.Brightness = Math.Clamp(s.Brightness, 0.05, 1);
         s.StartHour = Math.Clamp(s.StartHour, 0, 23);
         s.EndHour = Math.Clamp(s.EndHour, 0, 23);
-        s.last = JsonSerializer.Serialize(s);
+        s.last = fresh ? "" : JsonSerializer.Serialize(s); // fresh: save once so the seed isn't re-read from a pinned backlight
         return s;
     }
 

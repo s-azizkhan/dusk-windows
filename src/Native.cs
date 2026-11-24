@@ -166,7 +166,7 @@ public static class Backlight
     }
 
     // Built-in panel via WMI. Desktops have no instance and throw ManagementException; treat as "no laptop panel".
-    static byte? LaptopGet()
+    public static byte? LaptopGet()
     {
         try
         {
