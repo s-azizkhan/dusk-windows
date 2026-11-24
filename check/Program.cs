@@ -11,4 +11,6 @@ foreach (var k in new[] { 6000, 5000, 3400, 2700, 1900, 1200 })
 var dim = Warmth.Ramp(3400, 0.05);
 Trace.Assert(dim[255] < 3400 && dim[767] < dim[255], "5% dim should be dark and warm");
 Trace.Assert(Warmth.Matches(id, id) && !Warmth.Matches(id, dim), "readback match");
+var half = Warmth.Blend(dim, 0.5);
+Trace.Assert(Warmth.Matches(Warmth.Blend(dim, 0), id) && Warmth.Matches(Warmth.Blend(dim, 1), dim) && half[767] > dim[767] && half[767] < id[767], "blend toward neutral");
 Console.WriteLine("ok");

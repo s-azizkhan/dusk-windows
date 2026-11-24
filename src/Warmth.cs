@@ -34,6 +34,18 @@ public static class Warmth
         return ramp;
     }
 
+    // t = 0 gives the neutral ramp, t = 1 gives the full ramp.
+    public static ushort[] Blend(ushort[] full, double t)
+    {
+        var r = new ushort[768];
+        for (var i = 0; i < 768; i++)
+        {
+            var id = (i % 256) * 257;
+            r[i] = (ushort)Math.Round(id + t * (full[i] - id));
+        }
+        return r;
+    }
+
     // Drivers round ramps, so allow a small slack per entry.
     public static bool Matches(ushort[] want, ushort[] got)
     {

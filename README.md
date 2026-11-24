@@ -113,6 +113,7 @@ There was no Windows machine available, so:
   - sounds (the runner has no audio device)
 - **No anti-dithering.** NVIDIA's dither control is only reachable through undocumented NVAPI calls (what [novideo_srgb](https://github.com/ledoge/novideo_srgb) uses), and AMD and Intel have no safe public path. Dusk skips it rather than poke the driver blind. novideo_srgb or ColorControl can do it on NVIDIA today.
 - **HDR:** Windows ignores gamma ramps while HDR is on, and the read-back may not notice. Turn HDR off, and don't use flicker-free with HDR on, or the backlight can go to 100% with no dimming.
+- **Driver caps:** some drivers refuse warm or dim settings past a point, even after unlocking (one report: nothing past Evening). Dusk then sets the warmest the driver accepts and says how far it got. Restart Windows once after unlocking before judging the cap.
 - **Night light:** turn off Windows Night light so the two don't fight.
 - Some monitors don't support DDC/CI, or have it turned off in their own menu. Flicker-free skips those.
 - Some laptops reset brightness on their own (adaptive brightness, power plans). Turn off "Change brightness automatically" for flicker-free to hold.

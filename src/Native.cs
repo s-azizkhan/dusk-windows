@@ -20,20 +20,46 @@ public static class Gamma
 
     const string IcmKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM";
 
-    /// Sets warmth + dim on every display. False if any display didn't take it (Windows fails silently, so read back).
+    /// How much of the last Apply stuck, 0 (nothing) to 1 (all), on the worst display.
+    public static double Reached { get; private set; } = 1;
+
+    /// Sets warmth + dim on every display. False if any display didn't take it fully (Windows fails silently, so read back).
+    /// When a driver rejects the ramp, falls back to the warmest blend toward neutral it accepts.
     public static bool Apply(double kelvin, double dim)
     {
         var want = Warmth.Ramp(kelvin, dim);
-        var ok = true;
+        var reached = 1.0;
         foreach (var s in Screen.AllScreens)
         {
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero); // documented form: driver = display device name
-            if (dc == IntPtr.Zero) { ok = false; continue; }
-            var got = new ushort[768];
-            if (!SetDeviceGammaRamp(dc, want) || !GetDeviceGammaRamp(dc, got) || !Warmth.Matches(want, got)) ok = false;
+            if (dc == IntPtr.Zero) { reached = 0; continue; }
+            if (TrySet(dc, want)) cap.Remove(s.DeviceName);
+            else if (cap.TryGetValue(s.DeviceName, out var c) && c.Want.SequenceEqual(want) && TrySet(dc, Warmth.Blend(want, c.T)))
+                reached = Math.Min(reached, c.T); // same target as last time: reuse the cap, no visible search every tick
+            else
+            {
+                double lo = 0, hi = 1; // ponytail: 7 halvings, under 1% of the range
+                for (var i = 0; i < 7; i++)
+                {
+                    var mid = (lo + hi) / 2;
+                    if (TrySet(dc, Warmth.Blend(want, mid))) lo = mid; else hi = mid;
+                }
+                TrySet(dc, Warmth.Blend(want, lo));
+                cap[s.DeviceName] = (want, lo);
+                reached = Math.Min(reached, lo);
+            }
             DeleteDC(dc);
         }
-        return ok;
+        Reached = reached;
+        return reached >= 1;
+    }
+
+    static readonly Dictionary<string, (ushort[] Want, double T)> cap = new();
+
+    static bool TrySet(IntPtr dc, ushort[] ramp)
+    {
+        var got = new ushort[768];
+        return SetDeviceGammaRamp(dc, ramp) && GetDeviceGammaRamp(dc, got) && Warmth.Matches(ramp, got);
     }
 
     public static void Reset() => Apply(6500, 1);

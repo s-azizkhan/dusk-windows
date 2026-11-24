@@ -275,7 +275,9 @@ sealed class DuskWindow : Window
 
         var blocked = !GammaOK;
         var canUnlock = blocked && !Gamma.Unlocked;
-        mainWarn.Text = Gamma.Unlocked ? "Windows or your GPU driver didn't take this setting. HDR blocks it." : "Windows blocked this setting.";
+        mainWarn.Text = !Gamma.Unlocked ? "Windows blocked this setting."
+            : Gamma.Reached > 0 ? $"Your display driver stops at about {Math.Round(Gamma.Reached * 100)}% of this setting, so Dusk set the warmest it allows. Restart Windows once if you just unlocked it."
+            : "Windows or your display driver didn't take this setting. Restart Windows once after unlocking. HDR also blocks it.";
         ((FrameworkElement)mainWarn.Parent).Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         settingsWarn.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         ((FrameworkElement)settingsWarn.Parent).Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
