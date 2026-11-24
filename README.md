@@ -72,11 +72,23 @@ There was no Windows machine available, so:
   - a cancelled sign-out leaving a zombie process
 - The color math has a test that runs anywhere (`dotnet run --project check`).
 
-None of this replaces running it. See the first item below.
+- A smoke test (`ci/smoke.ps1`) runs on a GitHub Windows 11 runner on every push. It checks that Dusk:
+  - starts, stays running, opens its panel, and only runs one copy
+  - survives garbage and out-of-range settings without writing errors
+  - puts back levels left over from a crashed run
+  - shows the blocked warning and Unlock button when Windows rejects a ramp
+
+  On that runner Windows accepted 3400K at 100% but silently rejected 3400K at 80% and 1200K at 30%, even right after setting `GdiIcmGammaRange`. The read-back caught each rejection, and flicker-free correctly refused to pin. The runner has a virtual GPU with no backlight, so real brightness control still needs a real PC.
 
 ## Known limitations
 
-- **Not tested on Windows yet.** It was built and cross-compiled on a Mac. The code paths that need a real PC: gamma read-back across GPU drivers, the unlock prompt, WMI and DDC/CI brightness, sleep and display-change handling, and the tray UI layout at different scaling levels.
+- **Not tested on real hardware yet.** The smoke test runs it on a Windows VM. Still needs a real PC:
+  - gamma on NVIDIA, AMD and Intel drivers
+  - whether the unlock needs a restart
+  - the UAC prompt
+  - WMI and DDC/CI brightness
+  - sleep and display changes
+  - scaling above 100%
 - **No anti-dithering.** NVIDIA's dither control is only reachable through undocumented NVAPI calls (what [novideo_srgb](https://github.com/ledoge/novideo_srgb) uses), and AMD and Intel have no safe public path. Dusk skips it rather than poke the driver blind. novideo_srgb or ColorControl can do it on NVIDIA today.
 - **HDR:** Windows ignores gamma ramps while HDR is on, and the read-back may not notice. Turn HDR off, and don't use flicker-free with HDR on, or the backlight can go to 100% with no dimming.
 - **Night light:** turn off Windows Night light so the two don't fight.
