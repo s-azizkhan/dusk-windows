@@ -54,6 +54,19 @@ public static class Gamma
         return reached >= 1;
     }
 
+    /// One animation frame: no read-back or fallback, a rejected frame just doesn't show.
+    public static void Set(double kelvin, double dim)
+    {
+        var ramp = Warmth.Ramp(kelvin, dim);
+        foreach (var s in Screen.AllScreens)
+        {
+            var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero);
+            if (dc == IntPtr.Zero) continue;
+            SetDeviceGammaRamp(dc, ramp);
+            DeleteDC(dc);
+        }
+    }
+
     static readonly Dictionary<string, (ushort[] Want, double T)> cap = new();
 
     static bool TrySet(IntPtr dc, ushort[] ramp)

@@ -136,31 +136,66 @@ static class Program
         return S.StartHour <= S.EndHour ? h >= S.StartHour && h < S.EndHour : h >= S.StartHour || h < S.EndHour;
     }
 
+    static (double K, double Dim) shown = (6500, 1); // what the gamma ramp shows right now
+    static bool wasActive;
+    static System.Windows.Threading.DispatcherTimer? anim;
+
     public static void Apply(bool repin = false)
     {
         var active = S.Enabled && (!S.ScheduleOn || InNight());
-        if (active) { GammaOK = Gamma.Apply(S.Kelvin, S.Brightness); gammaTouched = true; }
-        else { if (gammaTouched) Gamma.Reset(); gammaTouched = false; GammaOK = true; }
+        var animate = active != wasActive || anim is not null;
+        wasActive = active;
+        anim?.Stop(); anim = null;
+        var pin = S.FlickerFree && active;
 
-        // Pin only if gamma verifiably applied, else pinning would make the screen brighter.
-        if (S.FlickerFree && active && GammaOK)
+        // Flicker-free: hand the laptop backlight's level over to gamma first, so pinning to 100% looks the same.
+        if (pin && S.Pinned is null && Backlight.LaptopGet() is byte b && Gamma.Apply(shown.K, shown.Dim * b / 100.0))
         {
-            if (S.Pinned is null || repin)
-            {
-                S.Pinned ??= new();
-                S.Save(); // persist intent before touching hardware
-                Backlight.Pin(S.Pinned);
-            }
+            shown.Dim *= b / 100.0;
+            S.Pinned = new();
+            S.Save(); // persist intent before touching hardware
+            Backlight.Pin(S.Pinned);
+            gammaTouched = true;
         }
-        else if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; }
+        var unpin = !pin && S.Pinned is not null;
+        var target = active ? (K: S.Kelvin, Dim: S.Brightness) : (K: 6500.0, Dim: unpin && S.Pinned!.Laptop is byte l ? l / 100.0 : 1);
 
+        void Finish()
+        {
+            if (active || unpin) { GammaOK = Gamma.Apply(target.K, target.Dim); gammaTouched = true; }
+            shown = target;
+            // Pin only if gamma verifiably applied, else pinning would make the screen brighter.
+            if (pin && GammaOK) { if (S.Pinned is null || repin) { S.Pinned ??= new(); S.Save(); Backlight.Pin(S.Pinned); } }
+            else if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; if (active) GammaOK = Gamma.Apply(target.K, target.Dim); }
+            if (!active) { if (gammaTouched) Gamma.Reset(); gammaTouched = false; GammaOK = true; shown = (6500, 1); }
+            UpdateTray();
+            panel.Sync();
+            S.Save();
+        }
+        if (!animate) { Finish(); return; }
+
+        // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim over 1.6s.
+        var from = shown;
+        var start = DateTime.UtcNow;
+        anim = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        anim.Tick += (_, _) =>
+        {
+            var x = Math.Min((DateTime.UtcNow - start).TotalSeconds / 1.6, 1);
+            if (x >= 1) { anim?.Stop(); anim = null; Finish(); return; }
+            var e = x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2;
+            var m = 1e6 / from.K + (1e6 / target.K - 1e6 / from.K) * e;
+            shown = (1e6 / m, from.Dim + (target.Dim - from.Dim) * e);
+            Gamma.Set(shown.K, shown.Dim);
+            gammaTouched = true;
+        };
+        anim.Start();
         UpdateTray();
         panel.Sync();
-        S.Save();
     }
 
     static void Restore()
     {
+        anim?.Stop(); anim = null;
         if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; S.Save(); }
         if (gammaTouched) Gamma.Reset();
         gammaTouched = false;
