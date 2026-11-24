@@ -25,6 +25,15 @@ public static class G {
 }
 '@
 
+Add-Type @'
+using System; using System.Runtime.InteropServices; using System.Threading;
+public static class M {
+  [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e);
+  public static void Click(int x, int y) { SetCursorPos(x, y); Thread.Sleep(120); mouse_event(2, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80); mouse_event(4, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(400); }
+}
+'@
+
 function Check($name, $cond) { if ($cond) { "PASS  $name" } else { "FAIL  $name"; $script:fail = $true } }
 function Info($name, $val) { "INFO  ${name}: $val" }
 function Shot($name) {
@@ -102,6 +111,22 @@ $p = Launch @('--open'); Shot 'main'; NoErrors 'main'; Stop $p
 $p = Launch @('--settings'); Start-Sleep 1; Shot 'settings'; NoErrors 'settings'; Stop $p
 Seed '{"Enabled":false,"Kelvin":1900,"Brightness":0.6}'
 $p = Launch @('--open'); Shot 'paused'; NoErrors 'paused'; Stop $p
+
+# 7. Real mouse input on the panel (coordinates from the 1024x768 runner layout at 100% scaling)
+function Saved { Get-Content (Join-Path $dir 'settings.json') -Raw | ConvertFrom-Json }
+function Fresh { Seed '{"Enabled":true,"Kelvin":3400,"Brightness":1}'; Launch @('--open') }
+$p = Fresh; [M]::Click(794, 606); Start-Sleep 1
+Check 'click Night chip sets 2700K' ((Saved).Kelvin -eq 2700); Shot 'after-chip'; Stop $p
+$p = Fresh; [M]::Click(976, 203); Start-Sleep 1
+Check 'click power switch turns Dusk off' ((Saved).Enabled -eq $false); Shot 'after-power'; Stop $p
+$p = Fresh; [M]::Click(839, 535); Start-Sleep 1
+$b = (Saved).Brightness; Check "click middle of bars sets about 50% (got $b)" ($b -ge 0.4 -and $b -le 0.6); Stop $p
+$p = Fresh; [M]::Click(768, 344); Start-Sleep 1
+$k = (Saved).Kelvin; Check "click left of dial ring sets about 5300K (got $k)" ($k -ge 5100 -and $k -le 5500); Shot 'after-dial'; Stop $p
+$p = Fresh; [M]::Click(854, 344); Start-Sleep 1
+Check 'click dial center toggles off' ((Saved).Enabled -eq $false); Stop $p
+$p = Fresh; [M]::Click(931, 203); Start-Sleep 1; [M]::Click(962, 459); Start-Sleep 1
+Check 'settings page: Sounds switch turns sounds off' ((Saved).Sounds -eq $false); Shot 'after-sounds'; Stop $p
 
 Info 'gamma at end' ([G]::Read())
 if ($script:fail) { throw 'Smoke test failed' }

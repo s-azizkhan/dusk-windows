@@ -150,6 +150,8 @@ sealed class DuskWindow : Window
         Content = outer;
 
         Deactivated += (_, _) => { Hide(); hiddenAt = DateTime.Now; };
+        // Anchored above the tray, so grow upward when rows appear (the Mac popover hangs from the menu bar instead).
+        SizeChanged += (_, e) => { if (IsVisible && e.HeightChanged) Top -= e.NewSize.Height - e.PreviousSize.Height; };
         IsVisibleChanged += (_, _) => { if (IsVisible) CompositionTarget.Rendering += Tick; else CompositionTarget.Rendering -= Tick; };
         PreviewKeyDown += (_, e) =>
         {
