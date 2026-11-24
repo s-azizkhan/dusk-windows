@@ -74,7 +74,7 @@ static class Theme
     // Segoe Fluent Icons / MDL2 glyphs standing in for the Mac app's SF Symbols.
     public const string GSun = "\uE706", GSunLow = "\uEC8A", GMoon = "\uE708", GSliders = "\uE9E9", GClose = "\uE711",
         GPulse = "\uE9D9", GClock = "\uE917", GPower = "\uE7E8", GSpeaker = "\uE767", GHeart = "\uEB52",
-        GWarn = "\uE7BA", GArrow = "\uE72A";
+        GWarn = "\uE7BA", GArrow = "\uE72A", GCheck = "\uE73E", GMinus = "\uE738";
 
     /// SwiftUI-ish spring: overshoots a little and settles. Duration ~ response.
     public static IEasingFunction Bounce(double damping = 0.78) =>

@@ -193,8 +193,10 @@ sealed class WarmthDial : Grid
         color = new(1, 0.4, 1, Repaint);
 
         glow = new Layer { Paint = (dc, _) => Arc(dc, 13, true), Effect = new BlurEffect { Radius = 18 }, IsHitTestVisible = false };
-        glow.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55, 0.95, TimeSpan.FromSeconds(2.8))
-        { AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever, EasingFunction = new System.Windows.Media.Animation.SineEase() });
+        var breathe = new System.Windows.Media.Animation.DoubleAnimation(0.55, 0.95, TimeSpan.FromSeconds(2.8))
+        { AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever, EasingFunction = new System.Windows.Media.Animation.SineEase() };
+        // Breathe only while the panel shows: a running forever-animation keeps WPF rendering (and the blur) when hidden.
+        IsVisibleChanged += (_, _) => glow.BeginAnimation(OpacityProperty, IsVisible ? breathe : null);
         face = new Layer { Paint = (dc, _) => { Ticks(dc); Arc(dc, 13 + 2 * drag.Value, false); Knob(dc); }, IsHitTestVisible = false };
         disc = new Layer
         {

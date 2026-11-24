@@ -25,12 +25,12 @@ public static class Gamma
 
     /// Sets warmth + dim on every display. False if any display didn't take it fully (Windows fails silently, so read back).
     /// When a driver rejects the ramp, falls back to the warmest blend toward neutral it accepts.
-    public static bool Apply(double kelvin, double dim)
+    public static bool Apply(double kelvin, double dim, double? laptopDim = null, string? laptop = null)
     {
-        var want = Warmth.Ramp(kelvin, dim);
         var reached = 1.0;
         foreach (var s in Screen.AllScreens)
         {
+            var want = Warmth.Ramp(kelvin, laptopDim is double ld && s.DeviceName == laptop ? ld : dim);
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero); // documented form: driver = display device name
             if (dc == IntPtr.Zero) { reached = 0; continue; }
             if (TrySet(dc, want)) cap.Remove(s.DeviceName);
@@ -55,11 +55,11 @@ public static class Gamma
     }
 
     /// One animation frame: no read-back or fallback, a rejected frame just doesn't show.
-    public static void Set(double kelvin, double dim)
+    public static void Set(double kelvin, double dim, double? laptopDim = null, string? laptop = null)
     {
-        var ramp = Warmth.Ramp(kelvin, dim);
         foreach (var s in Screen.AllScreens)
         {
+            var ramp = Warmth.Ramp(kelvin, laptopDim is double ld && s.DeviceName == laptop ? ld : dim);
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero);
             if (dc == IntPtr.Zero) continue;
             SetDeviceGammaRamp(dc, ramp);
@@ -157,6 +157,14 @@ public static class Backlight
         EachExternal((key, h) => { if (saved.External.TryGetValue(key, out var v)) SetMonitorBrightness(h, v); });
     }
 
+    /// Current and max level of every DDC/CI monitor that answers, for the self-test.
+    public static List<(uint Cur, uint Max)> ExternalLevels()
+    {
+        var l = new List<(uint, uint)>();
+        EachExternal((_, h) => { if (GetMonitorBrightness(h, out var _min, out var c, out var m)) l.Add((c, m)); });
+        return l;
+    }
+
     // DDC/CI. Keyed by the monitor's hardware ID (MONITOR\GSM5B7F\{...}\0001) so restores survive re-enumeration.
     // Monitors without DDC/CI just fail GetMonitorBrightness and are skipped.
     static void EachExternal(Action<string, IntPtr> act)
@@ -178,6 +186,41 @@ public static class Backlight
         }
     }
 
+    /// The screen (\\.\DISPLAYn) that is the laptop panel: its monitor ID matches the WMI brightness instance.
+    public static string? LaptopScreen()
+    {
+        try
+        {
+            using var q = new ManagementObjectSearcher(new ManagementScope(@"root\wmi"), new SelectQuery("WmiMonitorBrightness"));
+            foreach (ManagementObject o in q.Get())
+            {
+                var hw = ((string)o["InstanceName"]).Split('\\').ElementAtOrDefault(1); // DISPLAY\BOE0867\... -> BOE0867
+                if (string.IsNullOrEmpty(hw)) return null;
+                foreach (var s in Screen.AllScreens)
+                {
+                    var dd = new DisplayDevice { cb = (uint)Marshal.SizeOf<DisplayDevice>() };
+                    if (EnumDisplayDevices(s.DeviceName, 0, ref dd, 0) && dd.DeviceID.Contains(hw, StringComparison.OrdinalIgnoreCase)) return s.DeviceName;
+                }
+            }
+        }
+        catch (Exception) { } // no laptop panel or WMI off
+        return null;
+    }
+
+    static ManagementEventWatcher? watcher;
+
+    /// Pushes laptop brightness changes (keys, Action Center, auto-brightness) instead of polling WMI.
+    public static void WatchLaptop(Action<byte> changed)
+    {
+        try
+        {
+            watcher = new ManagementEventWatcher(new ManagementScope(@"root\wmi"), new EventQuery("SELECT * FROM WmiMonitorBrightnessEvent"));
+            watcher.EventArrived += (_, e) => { if (e.NewEvent["Brightness"] is byte b) changed(b); };
+            watcher.Start();
+        }
+        catch (Exception) { watcher = null; } // desktops and WMI-less systems: nothing to follow
+    }
+
     // Built-in panel via WMI. Desktops have no instance and throw ManagementException; treat as "no laptop panel".
     public static byte? LaptopGet()
     {
@@ -190,7 +233,7 @@ public static class Backlight
         return null;
     }
 
-    static void LaptopSet(byte value)
+    public static void LaptopSet(byte value)
     {
         try
         {

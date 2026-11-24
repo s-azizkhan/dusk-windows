@@ -87,7 +87,35 @@ sealed class DuskWindow : Window
         mainPage = Ui.Stack(14, dial, mainCard);
 
         // Settings page: three cards of toggle rows.
-        var (flickRow, flickSw, fSync) = Ui.ToggleRow(GPulse, "Flicker-free", "Backlight at 100%, dim in software", Mint);
+        var (flickRow, flickSw, fSync) = Ui.ToggleRow(GPulse, "Flicker-free", "Stops the backlight pulsing when dimmed", Mint);
+        var testResult = new StackPanel { Visibility = Visibility.Collapsed };
+        var testLabel = Ui.T("Test this", 12, 500);
+        var testBtn = Press.Squish(new Border
+        {
+            CornerRadius = new(9), Padding = new(0, 7, 0, 7), Background = Draw.B(A(Colors.White, 0.08)),
+            Child = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Children = { Ui.Glyph(GCheck, 12, Draw.B(Mint)), new Border { Width = 6 }, testLabel } },
+        }, () =>
+        {
+            var (h, text) = FlickerCheck();
+            testLabel.Text = "Test again";
+            var color = h == Health.Ok ? Mint : h == Health.Warn ? Orange : Colors.Gray;
+            var row = new DockPanel();
+            var g = Ui.Glyph(h == Health.Ok ? GCheck : h == Health.Warn ? GWarn : GMinus, 12, Draw.B(color)); g.VerticalAlignment = VerticalAlignment.Top; g.Margin = new(0, 1, 6, 0);
+            DockPanel.SetDock(g, Dock.Left);
+            var tb = Ui.T(text, 11, 400, Draw.B(A(Colors.White, 0.8))); tb.TextWrapping = TextWrapping.Wrap;
+            row.Children.Add(g); row.Children.Add(tb);
+            testResult.Children.Clear();
+            testResult.Children.Add(row);
+            if (h == Health.Ok)
+            {
+                var tip = Ui.T("See it yourself: film the screen in slow motion with your phone at low brightness. Dark rolling bands mean flicker; with Dusk on there should be none.", 10.5, 400, Draw.B(A(Colors.White, 0.55)));
+                tip.TextWrapping = TextWrapping.Wrap; tip.Margin = new(0, 8, 0, 0);
+                testResult.Children.Add(tip);
+            }
+            testResult.Visibility = Visibility.Visible;
+            testResult.Opacity = 0;
+            testResult.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(250)));
+        });
         flickSw.Changed += v => { S.FlickerFree = v; Apply(); };
         settingsWarn = Ui.T("Windows ignored the color change, so the backlight was left alone.", 11, 400, Draw.B(Orange));
         unlockSettings = Pill("Unlock warmer and dimmer", UnlockRange);
@@ -104,8 +132,14 @@ sealed class DuskWindow : Window
         var (soundRow, soundSw, soSync) = Ui.ToggleRow(GSpeaker, "Sounds", "Soft clicks on every control", Pink);
         soundSw.Changed += v => { S.Sounds = v; Apply(); };
         syncFlicker = fSync; syncSchedule = sSync; syncLogin = lSync; syncSounds = soSync;
-        settingsPage = Ui.Stack(12,
-            Ui.Card(flickRow, Warn(settingsWarn), unlockSettings),
+        // Settings can be taller than the main page (test results): scroll inside the same slot.
+        settingsPage = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, Padding = new(0, 0, 0, 12),
+            OpacityMask = new LinearGradientBrush(new GradientStopCollection { new(Colors.Black, 0), new(Colors.Black, 0.92), new(Colors.Transparent, 1) }, 90),
+        };
+        ((ScrollViewer)settingsPage).Content = Ui.Stack(12,
+            Ui.Card(flickRow, Warn(settingsWarn), unlockSettings, testBtn, testResult),
             Ui.Card(schedRow, hours),
             Ui.Card(loginRow, soundRow));
 

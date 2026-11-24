@@ -40,19 +40,21 @@ public class Settings
     }
 
     /// Writes only when something changed, via temp file + rename so a crash can't leave half a file.
-    public void Save()
+    public bool Save()
     {
         var json = JsonSerializer.Serialize(this);
-        if (json == last) return;
+        if (json == last) return true;
         try
         {
             Directory.CreateDirectory(Dir);
             File.WriteAllText(File_ + ".tmp", json);
             File.Move(File_ + ".tmp", File_, true);
             last = json;
+            return true;
         }
         catch (IOException) { } // locked by AV or sync tools; next change retries
         catch (UnauthorizedAccessException) { }
+        return false;
     }
 }
 
@@ -107,7 +109,7 @@ static class Program
         tray = new NotifyIcon { Visible = true, ContextMenuStrip = BuildMenu() };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) panel.Toggle(); };
 
-        var tick = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        var tick = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(60) }; // light keep-alive: schedule, gamma resets
         tick.Tick += (_, _) => Apply();
         tick.Start();
 
@@ -125,6 +127,9 @@ static class Program
         app.Exit += (_, _) => { Restore(); tray.Visible = false; };
 
         wasEnabled = S.Enabled; // no show on launch, only when the user switches
+        // Dusk's brightness is the laptop screen's real brightness: start from it if it was left lower.
+        if (Backlight.LaptopGet() is byte lb) { lastHW = lb / 100.0; shown.Dim = lastHW; if (lb < 99) S.Brightness = Math.Max(lb / 100.0, 0.05); }
+        Backlight.WatchLaptop(l => app.Dispatcher.BeginInvoke(() => OnBacklightChanged(l)));
         Apply();
         if (args.Contains("--open") || args.Contains("--settings")) panel.Toggle(); // lets CI screenshot the panel
         if (args.Contains("--settings")) panel.ShowSettingsPage();
@@ -137,9 +142,16 @@ static class Program
         return S.StartHour <= S.EndHour ? h >= S.StartHour && h < S.EndHour : h >= S.StartHour || h < S.EndHour;
     }
 
-    static (double K, double Dim) shown = (6500, 1); // what the gamma ramp shows right now
+    // Dim = brightness of the laptop screen: backlight x gamma. Other screens get the gamma part only.
+    static (double K, double Dim, double Ext) shown = (6500, 1, 1);
     static bool wasActive, wasEnabled;
     static System.Windows.Threading.DispatcherTimer? anim;
+    static readonly bool hasLaptop = Backlight.LaptopGet() is not null;
+    static double lastHW = 1; // laptop backlight Dusk last set or saw, 0..1
+    static string? laptopScreen;
+    static double pendingDelta;
+    static System.Windows.Threading.DispatcherTimer? follow;
+    const double MinBacklight = 0.1; // below this Dusk dims in software, so it can go darker than the hardware
 
     public static void Apply(bool repin = false)
     {
@@ -149,27 +161,33 @@ static class Program
         wasActive = active;
         anim?.Stop(); anim = null;
         var pin = S.FlickerFree && active;
-
-        // Flicker-free: hand the laptop backlight's level over to gamma first, so pinning to 100% looks the same.
-        if (pin && S.Pinned is null && Backlight.LaptopGet() is byte b && Gamma.Apply(shown.K, shown.Dim * b / 100.0))
-        {
-            shown.Dim *= b / 100.0;
-            S.Pinned = new();
-            S.Save(); // persist intent before touching hardware
-            Backlight.Pin(S.Pinned);
-            gammaTouched = true;
-        }
-        var unpin = !pin && S.Pinned is not null;
-        var target = active ? (K: S.Kelvin, Dim: S.Brightness) : (K: 6500.0, Dim: unpin && S.Pinned!.Laptop is byte l ? l / 100.0 : 1);
+        var target = (K: active ? S.Kelvin : 6500.0, Dim: active ? S.Brightness : hasLaptop ? Math.Max(S.Brightness, MinBacklight) : 1, Ext: active ? S.Brightness : 1);
 
         void Finish()
         {
-            if (active || unpin) { GammaOK = Gamma.Apply(target.K, target.Dim); gammaTouched = true; }
+            if (repin || laptopScreen is null) laptopScreen = Backlight.LaptopScreen();
+            if (pin)
+            {
+                // Flicker-free: dim everything in gamma first, then hold backlights at 100%, so it never flashes brighter.
+                GammaOK = Gamma.Apply(target.K, target.Ext, target.Dim, laptopScreen); gammaTouched = true;
+                if (GammaOK && (S.Pinned is null || repin || lastHW < 0.99))
+                {
+                    S.Pinned ??= new();
+                    if (S.Save()) { Backlight.Pin(S.Pinned); lastHW = 1; } // pin only once the restore info is on disk
+                    else S.Pinned = null;
+                }
+            }
+            if (!pin || !GammaOK || S.Pinned is null)
+            {
+                // Laptop backlight does the work down to its floor; gamma does the rest and dims other screens.
+                var hw = hasLaptop ? Math.Max(target.Dim, MinBacklight) : 1;
+                if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; lastHW = p.Laptop is byte l ? l / 100.0 : lastHW; }
+                if (hasLaptop && hw < lastHW) SetLaptop(hw); // going darker: backlight first, so it never flashes brighter
+                GammaOK = Gamma.Apply(target.K, target.Ext, target.Dim / hw, laptopScreen); gammaTouched = true;
+                if (hasLaptop) SetLaptop(hw);
+            }
+            if (!active) { if (gammaTouched) Gamma.Reset(); gammaTouched = false; GammaOK = true; }
             shown = target;
-            // Pin only if gamma verifiably applied, else pinning would make the screen brighter.
-            if (pin && GammaOK) { if (S.Pinned is null || repin) { S.Pinned ??= new(); S.Save(); Backlight.Pin(S.Pinned); } }
-            else if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; if (active) GammaOK = Gamma.Apply(target.K, target.Dim); }
-            if (!active) { if (gammaTouched) Gamma.Reset(); gammaTouched = false; GammaOK = true; shown = (6500, 1); }
             UpdateTray();
             panel.Sync();
             S.Save();
@@ -177,6 +195,7 @@ static class Program
         if (!animate) { Finish(); return; }
 
         // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim with the curtain.
+        // Frames touch gamma only; the backlight (slow WMI) moves once, at the end.
         var from = shown;
         var start = DateTime.UtcNow;
         anim = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
@@ -186,13 +205,62 @@ static class Program
             if (x >= 1) { anim?.Stop(); anim = null; Finish(); return; }
             var e = x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2;
             var m = 1e6 / from.K + (1e6 / target.K - 1e6 / from.K) * e;
-            shown = (1e6 / m, from.Dim + (target.Dim - from.Dim) * e);
-            Gamma.Set(shown.K, shown.Dim);
+            shown = (1e6 / m, from.Dim + (target.Dim - from.Dim) * e, from.Ext + (target.Ext - from.Ext) * e);
+            Gamma.Set(shown.K, shown.Ext, Math.Min(shown.Dim / lastHW, 1), laptopScreen);
             gammaTouched = true;
         };
         anim.Start();
         UpdateTray();
         panel.Sync();
+    }
+
+    static void SetLaptop(double v)
+    {
+        if (Math.Abs(v - lastHW) < 0.005) return;
+        Backlight.LaptopSet((byte)Math.Round(v * 100));
+        lastHW = v;
+    }
+
+    /// Brightness keys, Action Center or auto-brightness moved the laptop backlight: follow it instead of fighting it.
+    static void OnBacklightChanged(byte level)
+    {
+        if (level == (byte)Math.Round(lastHW * 100)) return; // our own change echoing back
+        var b = level / 100.0;
+        var delta = b - lastHW;
+        lastHW = b;
+        if (anim is not null) return; // Finish re-pins if needed
+        pendingDelta += delta;
+        // Holding a brightness key fires many events: apply once they settle.
+        follow ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        follow.Stop();
+        follow.Tick -= Follow; follow.Tick += Follow;
+        follow.Start();
+    }
+
+    static void Follow(object? s, EventArgs e)
+    {
+        follow!.Stop();
+        S.Brightness = Math.Clamp(S.Brightness + pendingDelta, 0.05, 1);
+        pendingDelta = 0;
+        Apply(repin: true);
+    }
+
+    public enum Health { Ok, Warn, Off }
+
+    /// Self-test for the settings page: re-applies, then reads the hardware back.
+    public static (Health, string) FlickerCheck()
+    {
+        Apply(repin: true);
+        if (!S.FlickerFree) return (Health.Off, "Flicker-free is off. At low brightness many screens dim by pulsing the backlight on and off very fast (PWM), which some eyes feel.");
+        if (!(S.Enabled && (!S.ScheduleOn || InNight()))) return (Health.Off, "Dusk is paused right now, so the backlight is back in your hands.");
+        if (!GammaOK) return (Health.Warn, "Windows or your display driver didn't accept the full colour change, so Dusk left the backlight alone to keep the screen from getting brighter.");
+        var levels = new List<double>();
+        if (Backlight.LaptopGet() is byte b) levels.Add(b / 100.0);
+        levels.AddRange(Backlight.ExternalLevels().Where(m => m.Max > 0).Select(m => m.Cur / (double)m.Max));
+        if (levels.Count == 0) return (Health.Warn, "No adjustable backlight found. Flicker-free needs a laptop screen, or a monitor with DDC/CI turned on in its own menu.");
+        var low = levels.Min();
+        if (low < 0.99) return (Health.Warn, $"A backlight is at {low * 100:0}%, not 100%. Turn off \"Change brightness automatically\" in Settings > System > Display.");
+        return (Health.Ok, $"Working. The backlight is held at 100%, so it doesn't pulse, and Dusk dims the picture to {S.Brightness * 100:0}% instead.");
     }
 
     static void Restore()
