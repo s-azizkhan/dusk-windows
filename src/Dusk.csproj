@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>Dusk.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>Dusk</AssemblyName>
+    <Version>0.1.0</Version>
+    <Product>Dusk</Product>
+    <Description>Warm screen. Calm eyes.</Description>
+    <Copyright>MIT, s-azizkhan</Copyright>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Dusk.ico" LogicalName="Dusk.ico" />
+    <PackageReference Include="System.Management" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>
