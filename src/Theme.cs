@@ -13,7 +13,7 @@ static class Theme
     public static readonly Color Rose = Color.FromRgb(242, 79, 122);
     public static readonly Color Crimson = Color.FromRgb(199, 31, 51);
     public static readonly Color Mint = Rgb(0x63E6E2), Orange = Rgb(0xFF9F0A), Pink = Rgb(0xFF375F);
-    public static readonly Brush Secondary = new SolidColorBrush(A(Colors.White, 0.55)), Tertiary = new SolidColorBrush(A(Colors.White, 0.3));
+    public static readonly Brush Secondary = new SolidColorBrush(A(Colors.White, 0.72)), Tertiary = new SolidColorBrush(A(Colors.White, 0.55));
 
     public static Color Rgb(int v) => Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v);
     public static Color A(Color c, double a) => Color.FromArgb((byte)Math.Round(Math.Clamp(a, 0, 1) * 255), c.R, c.G, c.B);

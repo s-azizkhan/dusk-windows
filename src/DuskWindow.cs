@@ -77,8 +77,8 @@ sealed class DuskWindow : Window
             chips.Add((c, k)); wrap.Children.Add(c);
         }
         var brightLabel = new StackPanel { Orientation = Orientation.Horizontal };
-        brightLabel.Children.Add(Ui.Glyph(GSunLow, 12, Secondary, 600));
-        var bl = Ui.T("Brightness", 12, 600, Secondary); bl.Margin = new(6, 0, 0, 0); brightLabel.Children.Add(bl);
+        brightLabel.Children.Add(Ui.Glyph(GSunLow, 12, Draw.B(A(Colors.White, 0.85)), 600));
+        var bl = Ui.T("Brightness", 12, 600, Draw.B(A(Colors.White, 0.85))); bl.Margin = new(6, 0, 0, 0); brightLabel.Children.Add(bl);
         // Windows-only: the default gamma range blocks warm/dim settings, so say so where the change was made.
         mainWarn = Ui.T("", 11, 400, Draw.B(Orange));
         unlockMain = Pill("Unlock warmer and dimmer", UnlockRange);

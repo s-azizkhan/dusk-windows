@@ -376,7 +376,7 @@ sealed class BrightnessBars : Grid
         ColumnDefinitions.Add(new() { Width = new(48) });
         sun = new TextBlock { Text = GSun, FontFamily = Icons, FontWeight = W(600), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
         bars = new Layer { Height = Ht, Margin = new(10, 0, 10, 0), Paint = (dc, sz) => Paint(dc, sz), Cursor = Cursors.Hand };
-        pct = new TextBlock { FontFamily = MonoW(500), FontWeight = W(500), FontSize = 12, Foreground = Secondary, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        pct = new TextBlock { FontFamily = MonoW(500), FontWeight = W(500), FontSize = 12, Foreground = Draw.B(A(Colors.White, 0.85)), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         SetColumn(bars, 1); SetColumn(pct, 2);
         Children.Add(sun); Children.Add(bars); Children.Add(pct);
         for (var i = 0; i < N; i++) lit[i] = new(1, 0.32, 0.62, bars.InvalidateVisual);
@@ -421,7 +421,7 @@ sealed class BrightnessBars : Grid
             if (i == Lit - 1) h *= 1 + 0.15 * lift.Value;
             var r = new Rect(i * (bw + Gap), sz.Height - h, bw, h);
             var hv = hover == i;
-            dc.DrawRoundedRectangle(Draw.B(A(Colors.White, hv ? 0.22 : 0.09)), hv ? new Pen(Draw.B(A(Colors.White, 0.6)), 1) : null, r, rad, rad);
+            dc.DrawRoundedRectangle(Draw.B(A(Colors.White, hv ? 0.28 : 0.14)), hv ? new Pen(Draw.B(A(Colors.White, 0.6)), 1) : null, r, rad, rad);
             if (lit[i].Value > 0.01)
             {
                 litBrush = litBrush.Clone(); litBrush.Opacity = Math.Clamp(lit[i].Value, 0, 1);
@@ -472,13 +472,13 @@ sealed class Chip : FrameworkElement
 
     public bool Selected { set => sel.To(value ? 1 : 0); }
 
-    FormattedText Label => Draw.Text(this, name, SansW(500), 12, Draw.B(Mix(A(Colors.White, 0.55), Colors.White, Math.Clamp(sel.Value, 0, 1))), 500);
+    FormattedText Label => Draw.Text(this, name, SansW(500), 12, Draw.B(Mix(A(Colors.White, 0.82), Colors.White, Math.Clamp(sel.Value, 0, 1))), 500);
     protected override Size MeasureOverride(Size _) { var t = Label; return new(10 + 9 + 6 + t.Width + 10, 12 + Math.Max(9, t.Height)); }
 
     protected override void OnRender(DrawingContext dc)
     {
         var r = new Rect(RenderSize); var s = Math.Clamp(sel.Value, 0, 1);
-        Draw.Capsule(dc, Draw.B(A(Colors.White, 0.06)), null, r);
+        Draw.Capsule(dc, Draw.B(A(Colors.White, 0.1)), new Pen(Draw.B(A(Colors.White, 0.12)), 0.8), new Rect(0.4, 0.4, r.Width - 0.8, r.Height - 0.8));
         if (s > 0.01) Draw.Capsule(dc, Draw.B(A(warm, 0.28 * s)), new Pen(Draw.B(A(warm, 0.6 * s)), 1), new Rect(0.5, 0.5, r.Width - 1, r.Height - 1));
         var dot = new Point(10 + 4.5, r.Height / 2);
         if (s > 0.01) dc.DrawEllipse(new RadialGradientBrush(A(warm, 0.8 * s), Colors.Transparent), null, dot, 9, 9);
