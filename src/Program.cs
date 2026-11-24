@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Windows.Forms;
 using Microsoft.Win32;
 using Drawing = System.Drawing;
 
@@ -10,6 +12,7 @@ public class Settings
     public double Kelvin { get; set; } = 3400;
     public double Brightness { get; set; } = 1;
     public bool FlickerFree { get; set; }
+    public bool Sounds { get; set; } = true;
     public bool ScheduleOn { get; set; }
     public int StartHour { get; set; } = 20;
     public int EndHour { get; set; } = 7;
@@ -81,7 +84,8 @@ static class Program
     public static bool GammaOK = true;
     static bool gammaTouched; // only reset gamma if Dusk changed it, so calibration LUTs from other tools survive
     static NotifyIcon tray = null!;
-    static Popup popup = null!;
+    static DuskWindow panel = null!;
+    static bool? trayOn;
 
     [STAThread]
     static void Main(string[] args)
@@ -89,41 +93,38 @@ static class Program
         using var single = new Mutex(true, "Dusk.SingleInstance", out var first);
         if (!first) return;
 
-        ApplicationConfiguration.Initialize();
-        Application.ThreadException += (_, e) => Log(e.Exception);
+        var app = new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
+        app.DispatcherUnhandledException += (_, e) => { Log(e.Exception); e.Handled = true; };
+        Theme.LoadFonts();
 
         // Last run crashed or was killed while pinned: put the user's real levels back first.
         if (S.Pinned is { } left) { Backlight.Restore(left); S.Pinned = null; S.Save(); }
 
-        popup = new Popup();
-        using var icon = typeof(Program).Assembly.GetManifestResourceStream("Dusk.ico")!;
-        tray = new NotifyIcon
-        {
-            Icon = new Drawing.Icon(icon, SystemInformation.SmallIconSize), // 16/20/24px frame, not a scaled-down 32px one
-            Visible = true,
-            ContextMenuStrip = BuildMenu(),
-        };
-        tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) popup.Toggle(); };
+        panel = new DuskWindow();
+        tray = new NotifyIcon { Visible = true, ContextMenuStrip = BuildMenu() };
+        tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) panel.Toggle(); };
 
-        var tick = new System.Windows.Forms.Timer { Interval = 30_000 };
+        var tick = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         tick.Tick += (_, _) => Apply();
         tick.Start();
 
         // Windows resets gamma on display events, monitors can lose DDC state on sleep,
         // and laptops switch to a separate AC/DC brightness when the charger changes.
-        var later = new System.Windows.Forms.Timer { Interval = 2000 };
+        var later = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         later.Tick += (_, _) => { later.Stop(); Apply(repin: true); };
-        void Soon() { later.Stop(); later.Start(); }
+        void Soon() => app.Dispatcher.BeginInvoke(() => { later.Stop(); later.Start(); });
         SystemEvents.DisplaySettingsChanged += (_, _) => Soon();
         SystemEvents.PowerModeChanged += (_, e) => { if (e.Mode is PowerModes.Resume or PowerModes.StatusChange) Soon(); };
         SystemEvents.SessionSwitch += (_, e) => { if (e.Reason == SessionSwitchReason.SessionUnlock) Soon(); };
+        SystemEvents.UserPreferenceChanged += (_, _) => app.Dispatcher.BeginInvoke(() => { trayOn = null; UpdateTray(); }); // taskbar light/dark
         // SessionEnding can still be cancelled; SessionEnded can't.
         SystemEvents.SessionEnded += (_, _) => Restore();
-        Application.ApplicationExit += (_, _) => { Restore(); tray.Visible = false; };
+        app.Exit += (_, _) => { Restore(); tray.Visible = false; };
 
         Apply();
-        if (args.Contains("--open")) popup.Toggle(); // lets CI screenshot the panel
-        Application.Run();
+        if (args.Contains("--open") || args.Contains("--settings")) panel.Toggle(); // lets CI screenshot the panel
+        if (args.Contains("--settings")) panel.ShowSettingsPage();
+        app.Run();
     }
 
     static bool InNight()
@@ -150,8 +151,8 @@ static class Program
         }
         else if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; }
 
-        tray.Text = !S.Enabled ? "Dusk: off" : $"Dusk: {S.Kelvin:0}K, {S.Brightness * 100:0}%";
-        popup.Sync();
+        UpdateTray();
+        panel.Sync();
         S.Save();
     }
 
@@ -160,6 +161,45 @@ static class Program
         if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; S.Save(); }
         if (gammaTouched) Gamma.Reset();
         gammaTouched = false;
+    }
+
+    static void UpdateTray()
+    {
+        tray.Text = !S.Enabled ? "Dusk: off" : $"Dusk: {S.Kelvin:0}K, {S.Brightness * 100:0}%";
+        if (trayOn == S.Enabled) return;
+        trayOn = S.Enabled;
+        var old = tray.Icon;
+        tray.Icon = TrayIcon(S.Enabled);
+        old?.Dispose();
+    }
+
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
+
+    /// Slit-sun mark, filled when on and outlined when off, like the Mac menu-bar icon.
+    /// White on a dark taskbar, black on a light one.
+    static Drawing.Icon TrayIcon(bool on)
+    {
+        var size = SystemInformation.SmallIconSize.Width;
+        using var personalize = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+        var light = personalize?.GetValue("SystemUsesLightTheme") is int v && v == 1;
+        var ink = light ? Drawing.Color.Black : Drawing.Color.White;
+        using var bmp = new Drawing.Bitmap(size, size);
+        using (var g = Drawing.Graphics.FromImage(bmp))
+        {
+            var s = size / 18f;
+            g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var disc = new Drawing.RectangleF(1.5f * s, 1.5f * s, 15 * s, 15 * s);
+            if (on) { using var b = new Drawing.SolidBrush(ink); g.FillEllipse(b, disc); }
+            else { using var pen = new Drawing.Pen(ink, Math.Max(1.5f * s, 1)); g.DrawEllipse(pen, disc); }
+            g.CompositingMode = Drawing.Drawing2D.CompositingMode.SourceCopy;
+            using var clear = new Drawing.SolidBrush(Drawing.Color.Transparent);
+            foreach (var (y, h) in new[] { (9.5f, 1.1f), (11.6f, 1.5f), (13.7f, 1.9f) })
+                g.FillRectangle(clear, 0, y * s, size, Math.Max(h * s, 1));
+        }
+        var hIcon = bmp.GetHicon();
+        var icon = (Drawing.Icon)Drawing.Icon.FromHandle(hIcon).Clone();
+        DestroyIcon(hIcon);
+        return icon;
     }
 
     static void Log(Exception e)
@@ -174,13 +214,13 @@ static class Program
         m.Opening += (_, _) =>
         {
             m.Items.Clear();
-            m.Items.Add("Open Dusk", null, (_, _) => popup.Toggle());
+            m.Items.Add("Open Dusk", null, (_, _) => panel.Toggle());
             m.Items.Add(new ToolStripMenuItem("On", null, (_, _) => { S.Enabled = !S.Enabled; Apply(); }) { Checked = S.Enabled });
             m.Items.Add(new ToolStripSeparator());
             foreach (var (name, k) in Presets)
                 m.Items.Add(new ToolStripMenuItem($"{name}  {k}K", null, (_, _) => { S.Kelvin = k; S.Enabled = true; Apply(); }) { Checked = S.Kelvin == k });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add("Quit Dusk", null, (_, _) => Application.Exit());
+            m.Items.Add("Quit Dusk", null, (_, _) => System.Windows.Application.Current.Shutdown());
         };
         m.Items.Add("…"); // Opening only fires when the strip has items
         return m;

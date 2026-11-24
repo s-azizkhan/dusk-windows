@@ -2,7 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 using Microsoft.Win32;
+using Point = System.Drawing.Point;
 
 // Load Win32 DLLs only from System32, never from the exe's folder (e.g. Downloads).
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -21,14 +23,14 @@ public static class Gamma
     /// Sets warmth + dim on every display. False if any display didn't take it (Windows fails silently, so read back).
     public static bool Apply(double kelvin, double dim)
     {
-        var want = Color.Ramp(kelvin, dim);
+        var want = Warmth.Ramp(kelvin, dim);
         var ok = true;
         foreach (var s in Screen.AllScreens)
         {
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero); // documented form: driver = display device name
             if (dc == IntPtr.Zero) { ok = false; continue; }
             var got = new ushort[768];
-            if (!SetDeviceGammaRamp(dc, want) || !GetDeviceGammaRamp(dc, got) || !Color.Matches(want, got)) ok = false;
+            if (!SetDeviceGammaRamp(dc, want) || !GetDeviceGammaRamp(dc, got) || !Warmth.Matches(want, got)) ok = false;
             DeleteDC(dc);
         }
         return ok;

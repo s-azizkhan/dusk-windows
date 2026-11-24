@@ -3,12 +3,13 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>Dusk.ico</ApplicationIcon>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>Dusk</AssemblyName>
     <Version>0.1.0</Version>
     <Product>Dusk</Product>
@@ -23,7 +24,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Dusk.ico" LogicalName="Dusk.ico" />
+    <EmbeddedResource Include="Fonts/*.ttf" LogicalName="%(Filename)%(Extension)" />
+    <None Include="Fonts/OFL.txt" CopyToPublishDirectory="Never" />
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Using Include="System.IO" />
     <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 

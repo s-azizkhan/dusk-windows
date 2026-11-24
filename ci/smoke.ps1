@@ -96,5 +96,12 @@ Check 'crash restore: Pinned cleared' ($null -eq $s.Pinned)
 NoErrors 'crash-restore'
 Stop $p
 
+# 6. Screenshots of both pages in a state Windows accepts (no warning)
+Seed '{"Enabled":true,"Kelvin":3400,"Brightness":1}'
+$p = Launch @('--open'); Shot 'main'; NoErrors 'main'; Stop $p
+$p = Launch @('--settings'); Start-Sleep 1; Shot 'settings'; NoErrors 'settings'; Stop $p
+Seed '{"Enabled":false,"Kelvin":1900,"Brightness":0.6}'
+$p = Launch @('--open'); Shot 'paused'; NoErrors 'paused'; Stop $p
+
 Info 'gamma at end' ([G]::Read())
 if ($script:fail) { throw 'Smoke test failed' }

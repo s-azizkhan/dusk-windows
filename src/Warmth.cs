@@ -1,6 +1,6 @@
 namespace Dusk;
 
-public static class Color
+public static class Warmth
 {
     // Tanner Helland approximation, extended below 1000K toward deep red. Same curve as the Mac app.
     public static (double r, double g, double b) Rgb(double kelvin)
