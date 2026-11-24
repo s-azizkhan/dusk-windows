@@ -11,6 +11,7 @@ static class Theme
     public static readonly Color Sun = Color.FromRgb(255, 224, 138);
     public static readonly Color Ember = Color.FromRgb(255, 154, 77);
     public static readonly Color Rose = Color.FromRgb(242, 79, 122);
+    public static readonly Color Night = Color.FromRgb(14, 10, 42), Indigo = Color.FromRgb(42, 29, 102);
     public static readonly Color Crimson = Color.FromRgb(199, 31, 51);
     public static readonly Color Mint = Rgb(0x63E6E2), Orange = Rgb(0xFF9F0A), Pink = Rgb(0xFF375F);
     public static readonly Brush Secondary = new SolidColorBrush(A(Colors.White, 0.72)), Tertiary = new SolidColorBrush(A(Colors.White, 0.55));

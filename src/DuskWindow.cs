@@ -31,6 +31,7 @@ sealed class DuskWindow : Window
     readonly GradientStop tintStop = new(Colors.Transparent, 0);
     readonly Layer dust;
     readonly Border root;
+    readonly Grid layers;
     bool settings;
     DateTime hiddenAt;
 
@@ -135,7 +136,7 @@ sealed class DuskWindow : Window
         var wash = new Rectangle { Fill = new LinearGradientBrush(new GradientStopCollection { tintStop, new(Colors.Transparent, 0.5) }, 90), IsHitTestVisible = false };
         dust = new Layer { IsHitTestVisible = false, Paint = PaintDust };
         var grain = new Rectangle { Fill = Ui.Grain(), IsHitTestVisible = false };
-        var layers = new Grid();
+        layers = new Grid();
         foreach (var l in new UIElement[] { wash, dust, grain, content }) layers.Children.Add(l);
 
         root = new Border
@@ -256,6 +257,18 @@ sealed class DuskWindow : Window
         var br = m.Transform(new Point(area.Right, area.Bottom));
         Left = br.X - ActualWidth + ShadowPad - 8;
         Top = br.Y - ActualHeight + ShadowPad - 8;
+    }
+
+    /// Plays Sundown inside the panel, in step with the screens.
+    public void PlaySundown(bool on)
+    {
+        if (!SystemParameters.ClientAreaAnimation) return;
+        foreach (var old in layers.Children.OfType<SundownScene>().ToList()) layers.Children.Remove(old);
+        var scene = new SundownScene(on);
+        layers.Children.Add(scene);
+        var done = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(SundownScene.Duration + 0.05) };
+        done.Tick += (_, _) => { done.Stop(); layers.Children.Remove(scene); };
+        done.Start();
     }
 
     public void Sync()

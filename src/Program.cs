@@ -124,6 +124,7 @@ static class Program
         SystemEvents.SessionEnded += (_, _) => Restore();
         app.Exit += (_, _) => { Restore(); tray.Visible = false; };
 
+        wasEnabled = S.Enabled; // no show on launch, only when the user switches
         Apply();
         if (args.Contains("--open") || args.Contains("--settings")) panel.Toggle(); // lets CI screenshot the panel
         if (args.Contains("--settings")) panel.ShowSettingsPage();
@@ -137,12 +138,13 @@ static class Program
     }
 
     static (double K, double Dim) shown = (6500, 1); // what the gamma ramp shows right now
-    static bool wasActive;
+    static bool wasActive, wasEnabled;
     static System.Windows.Threading.DispatcherTimer? anim;
 
     public static void Apply(bool repin = false)
     {
         var active = S.Enabled && (!S.ScheduleOn || InNight());
+        if (S.Enabled != wasEnabled) { wasEnabled = S.Enabled; ScreenSundown.Play(S.Enabled); panel.PlaySundown(S.Enabled); }
         var animate = active != wasActive || anim is not null;
         wasActive = active;
         anim?.Stop(); anim = null;
@@ -174,13 +176,13 @@ static class Program
         }
         if (!animate) { Finish(); return; }
 
-        // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim over 1.6s.
+        // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim with the curtain.
         var from = shown;
         var start = DateTime.UtcNow;
         anim = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         anim.Tick += (_, _) =>
         {
-            var x = Math.Min((DateTime.UtcNow - start).TotalSeconds / 1.6, 1);
+            var x = Math.Min((DateTime.UtcNow - start).TotalSeconds / SundownScene.Duration, 1);
             if (x >= 1) { anim?.Stop(); anim = null; Finish(); return; }
             var e = x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2;
             var m = 1e6 / from.K + (1e6 / target.K - 1e6 / from.K) * e;
