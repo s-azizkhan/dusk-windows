@@ -193,6 +193,7 @@ static class Program
             S.Save();
         }
         if (!animate) { Finish(); return; }
+        S.Save(); // the switch is saved now, not 2.2s later when the fade ends
 
         // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim with the curtain.
         // Frames touch gamma only; the backlight (slow WMI) moves once, at the end.

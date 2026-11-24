@@ -125,7 +125,7 @@ $p = Fresh; [M]::Click(768, 344); Start-Sleep 1
 $k = (Saved).Kelvin; Check "click left of dial ring sets about 5300K (got $k)" ($k -ge 5100 -and $k -le 5500); Shot 'after-dial'; Stop $p
 $p = Fresh; [M]::Click(854, 344); Start-Sleep 1
 Check 'click dial center toggles off' ((Saved).Enabled -eq $false); Stop $p
-$p = Fresh; [M]::Click(931, 203); Start-Sleep 1; [M]::Click(962, 459); Start-Sleep 1
+$p = Fresh; [M]::Click(931, 203); Start-Sleep 1; [M]::Click(962, 498); Start-Sleep 1
 Check 'settings page: Sounds switch turns sounds off' ((Saved).Sounds -eq $false); Shot 'after-sounds'; Stop $p
 
 Info 'gamma at end' ([G]::Read())
