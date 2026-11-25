@@ -25,7 +25,9 @@ sealed class DuskWindow : Window
     readonly FrameworkElement mainCard, mainPage, settingsPage;
     readonly Grid pages;
     readonly TextBlock title, settingsGlyph, mainWarn, settingsWarn;
-    readonly FrameworkElement unlockMain, unlockSettings, hours;
+    readonly FrameworkElement unlockMain, unlockSettings, hours, screenPicker;
+    readonly TextBlock screenLabel = Ui.T("", 11, 500, Draw.B(A(Colors.White, 0.85)));
+    readonly TextBlock screenGlyph = Ui.Glyph(GDisplay, 10, Draw.B(A(Colors.White, 0.85)), 600);
     readonly Action<bool> syncFlicker, syncSchedule, syncLogin, syncSounds;
     readonly TextBlock fromText, toText;
     readonly GradientStop tintStop = new(Colors.Transparent, 0);
@@ -57,24 +59,25 @@ sealed class DuskWindow : Window
             BorderBrush = Draw.B(A(Colors.White, 0.12)), BorderThickness = new(0.6), ToolTip = "Settings", Margin = new(0, 0, 8, 0),
         }, () => ShowSettings(!settings));
         power = new GlowSwitch("Dusk", Ember, GSun, GMoon) { VerticalAlignment = VerticalAlignment.Center };
-        power.Changed += on => { S.Enabled = on; Apply(); };
+        power.Changed += on => Power = on;
+        screenPicker = ScreenPicker();
         var header = new Grid();
         foreach (var w in new[] { GridLength.Auto, GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto, GridLength.Auto })
             header.ColumnDefinitions.Add(new() { Width = w });
-        Grid.SetColumn(title, 1); Grid.SetColumn(gear, 3); Grid.SetColumn(power, 4);
-        header.Children.Add(mark); header.Children.Add(title); header.Children.Add(gear); header.Children.Add(power);
+        Grid.SetColumn(title, 1); Grid.SetColumn(screenPicker, 2); Grid.SetColumn(gear, 3); Grid.SetColumn(power, 4);
+        header.Children.Add(mark); header.Children.Add(title); header.Children.Add(screenPicker); header.Children.Add(gear); header.Children.Add(power);
 
         // Main page: dial, then a card with brightness and presets.
         dial = new WarmthDial { HorizontalAlignment = HorizontalAlignment.Center };
-        dial.KelvinChanged += k => { S.Kelvin = k; Apply(); };
-        dial.ToggleRequested += () => { S.Enabled = !S.Enabled; Sound.Toggle(S.Enabled); Apply(); };
+        dial.KelvinChanged += SetKelvin;
+        dial.ToggleRequested += () => { Power = !Power; Sound.Toggle(Power); };
         bars = new BrightnessBars();
-        bars.Changed += v => { S.Brightness = Math.Max(v, 0.05); Apply(); };
+        bars.Changed += SetBrightness;
         var wrap = new CenteredWrap { Spacing = 6 };
         foreach (var (name, k) in Presets)
         {
             var c = new Chip(name, k);
-            c.Click += () => { S.Kelvin = k; Apply(); };
+            c.Click += () => SetKelvin(k);
             chips.Add((c, k)); wrap.Children.Add(c);
         }
         var brightLabel = new StackPanel { Orientation = Orientation.Horizontal };
@@ -258,6 +261,7 @@ sealed class DuskWindow : Window
         if (on == settings) return;
         settings = on;
         title.Text = on ? "Settings" : "Dusk";
+        SyncPicker();
         settingsGlyph.Text = on ? GClose : GSliders;
         Slide(mainPage, on ? -40 : 0, on ? 0 : 1);
         Slide(settingsPage, on ? 0 : 40, on ? 1 : 0);
@@ -307,15 +311,18 @@ sealed class DuskWindow : Window
 
     public void Sync()
     {
-        var tint = Warm(S.Kelvin);
-        var preset = Presets.FirstOrDefault(p => Math.Abs(p.Kelvin - S.Kelvin) < 1).Name ?? "Custom";
-        power.IsOn = S.Enabled; power.Tint = tint;
-        dial.Set(S.Kelvin, S.Enabled, preset);
-        bars.Set(S.Brightness, tint, IsVisible);
-        foreach (var (c, k) in chips) c.Selected = Math.Abs(k - S.Kelvin) < 1;
-        mainCard.IsEnabled = S.Enabled;
-        Animate(mainCard, OpacityProperty, S.Enabled ? 1 : 0.5, 300);
-        tintStop.Color = A(tint, S.Enabled ? 0.26 : 0.04);
+        var (kelvin, bright) = Cur;
+        var on = Power;
+        var tint = Warm(kelvin);
+        var preset = Presets.FirstOrDefault(p => Math.Abs(p.Kelvin - kelvin) < 1).Name ?? "Custom";
+        power.IsOn = on; power.Tint = tint;
+        dial.Set(kelvin, on, preset);
+        bars.Set(bright, tint, IsVisible);
+        foreach (var (c, k) in chips) c.Selected = Math.Abs(k - kelvin) < 1;
+        mainCard.IsEnabled = on;
+        Animate(mainCard, OpacityProperty, on ? 1 : 0.5, 300);
+        tintStop.Color = A(tint, on ? 0.26 : 0.04);
+        SyncPicker();
         syncFlicker(S.FlickerFree); syncSchedule(S.ScheduleOn); syncLogin(Startup.On); syncSounds(S.Sounds);
         hours.Visibility = S.ScheduleOn ? Visibility.Visible : Visibility.Collapsed;
         fromText.Text = $"{S.StartHour:00}:00"; toText.Text = $"{S.EndHour:00}:00";
@@ -329,7 +336,53 @@ sealed class DuskWindow : Window
         settingsWarn.Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         ((FrameworkElement)settingsWarn.Parent).Visibility = blocked ? Visibility.Visible : Visibility.Collapsed;
         unlockMain.Visibility = unlockSettings.Visibility = canUnlock ? Visibility.Visible : Visibility.Collapsed;
-        dust.Opacity = S.Enabled ? 1 : 0.35;
+        dust.Opacity = on ? 1 : 0.35;
+    }
+
+    /// "All screens / Laptop screen / LG ULTRAGEAR" pill after the title. Only shown with two or more screens.
+    FrameworkElement ScreenPicker()
+    {
+        var list = new StackPanel();
+        var popup = new Popup { StaysOpen = false, AllowsTransparency = true, Placement = PlacementMode.Bottom, PopupAnimation = PopupAnimation.Fade };
+        var chevron = Ui.Glyph(GChevron, 8, Draw.B(A(Colors.White, 0.6)), 700);
+        screenLabel.TextTrimming = TextTrimming.CharacterEllipsis; screenLabel.MaxWidth = 78; screenLabel.Margin = new(4, 0, 4, 0);
+        var pill = new Border
+        {
+            CornerRadius = new(10), Padding = new(8, 3, 8, 3), Margin = new(8, 0, 8, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+            Background = Draw.B(A(Colors.White, 0.08)), BorderBrush = Draw.B(A(Colors.White, 0.12)), BorderThickness = new(0.6), ToolTip = "Pick the screen to change",
+            Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { screenGlyph, screenLabel, chevron } },
+        };
+        System.Windows.Automation.AutomationProperties.SetName(pill, "Screen to change");
+        popup.Child = new Border
+        {
+            Background = Draw.B(Color.FromRgb(36, 33, 46)), CornerRadius = new(10), Padding = new(4), BorderBrush = Draw.B(A(Colors.White, 0.1)), BorderThickness = new(1), Child = list,
+        };
+        popup.PlacementTarget = pill;
+        popup.Opened += (_, _) =>
+        {
+            list.Children.Clear();
+            foreach (var (key, name, glyph) in new[] { ("all", "All screens", GScreens) }.Concat(Screens.Select(m => (m.Key, On(m.Key) ? m.Name : $"{m.Name} · off", m.Laptop ? GLaptop : GDisplay))))
+            {
+                var sel = key == S.Selected;
+                var row = new StackPanel { Orientation = Orientation.Horizontal };
+                row.Children.Add(Ui.Glyph(sel ? GCheck : glyph, 11, Draw.B(sel ? Ember : A(Colors.White, 0.7))));
+                var t = Ui.T(name, 12, 500); t.Margin = new(8, 0, 0, 0); row.Children.Add(t);
+                var item = new Border { Padding = new(10, 5, 18, 5), CornerRadius = new(6), Child = row, Background = Brushes.Transparent, Cursor = Cursors.Hand };
+                item.MouseEnter += (_, _) => item.Background = Draw.B(A(Ember, 0.25));
+                item.MouseLeave += (_, _) => item.Background = Brushes.Transparent;
+                item.MouseLeftButtonUp += (_, _) => { popup.IsOpen = false; S.Selected = key; S.Save(); Sound.Snap(); Sync(); };
+                list.Children.Add(item);
+            }
+        };
+        return Press.Squish(pill, () => popup.IsOpen = true);
+    }
+
+    void SyncPicker()
+    {
+        var m = Screens.FirstOrDefault(x => x.Key == S.Selected);
+        screenLabel.Text = m?.Name ?? "All screens";
+        screenGlyph.Text = m is null ? GScreens : m.Laptop ? GLaptop : GDisplay;
+        screenPicker.Visibility = Screens.Count > 1 && !settings ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // Slow warm dust motes drifting upward, like light at sunset. Only runs while visible, ~30 fps.
@@ -347,7 +400,7 @@ sealed class DuskWindow : Window
     void PaintDust(DrawingContext dc, Size size)
     {
         var t = (DateTime.Now - DateTime.Today).TotalSeconds;
-        var tint = Warm(S.Kelvin);
+        var tint = Warm(Cur.K);
         for (var i = 0; i < 26; i++)
         {
             var speed = 4 + Rnd(i, 1) * 10;

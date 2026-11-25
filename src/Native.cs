@@ -23,14 +23,15 @@ public static class Gamma
     /// How much of the last Apply stuck, 0 (nothing) to 1 (all), on the worst display.
     public static double Reached { get; private set; } = 1;
 
-    /// Sets warmth + dim on every display. False if any display didn't take it fully (Windows fails silently, so read back).
-    /// When a driver rejects the ramp, falls back to the warmest blend toward neutral it accepts.
-    public static bool Apply(double kelvin, double dim, double? laptopDim = null, string? laptop = null)
+    /// Sets warmth + dim per display (look: \\.\DISPLAYn -> kelvin, dim). False if any display didn't take it fully
+    /// (Windows fails silently, so read back). When a driver rejects the ramp, falls back to the warmest blend it accepts.
+    public static bool Apply(Func<string, (double K, double Dim)> look)
     {
         var reached = 1.0;
         foreach (var s in Screen.AllScreens)
         {
-            var want = Warmth.Ramp(kelvin, laptopDim is double ld && s.DeviceName == laptop ? ld : dim);
+            var (kelvin, dim) = look(s.DeviceName);
+            var want = Warmth.Ramp(kelvin, dim);
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero); // documented form: driver = display device name
             if (dc == IntPtr.Zero) { reached = 0; continue; }
             if (TrySet(dc, want)) cap.Remove(s.DeviceName);
@@ -55,11 +56,12 @@ public static class Gamma
     }
 
     /// One animation frame: no read-back or fallback, a rejected frame just doesn't show.
-    public static void Set(double kelvin, double dim, double? laptopDim = null, string? laptop = null)
+    public static void Set(Func<string, (double K, double Dim)> look)
     {
         foreach (var s in Screen.AllScreens)
         {
-            var ramp = Warmth.Ramp(kelvin, laptopDim is double ld && s.DeviceName == laptop ? ld : dim);
+            var (kelvin, dim) = look(s.DeviceName);
+            var ramp = Warmth.Ramp(kelvin, dim);
             var dc = CreateDC(s.DeviceName, null, null, IntPtr.Zero);
             if (dc == IntPtr.Zero) continue;
             SetDeviceGammaRamp(dc, ramp);
@@ -75,7 +77,7 @@ public static class Gamma
         return SetDeviceGammaRamp(dc, ramp) && GetDeviceGammaRamp(dc, got) && Warmth.Matches(ramp, got);
     }
 
-    public static void Reset() => Apply(6500, 1);
+    public static void Reset() => Apply(_ => (6500, 1));
 
     // Without this value Windows refuses ramps far from identity (warm or dim settings).
     public static bool Unlocked
@@ -107,6 +109,8 @@ public class SavedBacklight
 {
     public byte? Laptop { get; set; }
     public Dictionary<string, uint> External { get; set; } = new();
+    /// Per screen (\\.\DISPLAYn): level it was at / max, so gamma can carry it and nothing jumps brighter.
+    public Dictionary<string, double> Scale { get; set; } = new();
 }
 
 /// Flicker-free: hold backlights at 100% and dim in gamma instead.
@@ -134,40 +138,49 @@ public static class Backlight
     [DllImport("dxva2.dll")] static extern bool GetMonitorBrightness(IntPtr h, out uint min, out uint cur, out uint max);
     [DllImport("dxva2.dll")] static extern bool SetMonitorBrightness(IntPtr h, uint value);
 
-    /// Pins everything to 100%, recording original levels into `saved` (first value wins, so repins keep the real original).
-    public static void Pin(SavedBacklight saved)
+    /// Pins the laptop (if asked) and the external screens in `screens` to 100%, recording original levels into `saved`
+    /// (first value wins, so repins keep the real original).
+    public static void Pin(SavedBacklight saved, bool laptop, ISet<string> screens)
     {
-        var cur = LaptopGet();
-        if (cur is byte b)
+        if (laptop && LaptopGet() is byte b)
         {
             saved.Laptop ??= b;
             if (b != 100) LaptopSet(100);
         }
-        EachExternal((key, h) =>
+        EachExternal((screen, key, h) =>
         {
-            if (!GetMonitorBrightness(h, out _, out var c, out var max)) return;
-            saved.External.TryAdd(key, c);
+            if (!screens.Contains(screen) || !GetMonitorBrightness(h, out _, out var c, out var max) || max == 0) return;
+            if (saved.External.TryAdd(key, c)) saved.Scale[screen] = Math.Max(c / (double)max, 0.05);
             if (c != max) SetMonitorBrightness(h, max);
         });
     }
 
-    public static void Restore(SavedBacklight saved)
+    /// Gives back everything not in keep. Returns the laptop level it restored, if any.
+    public static byte? Restore(SavedBacklight saved, bool keepLaptop = false, ISet<string>? keep = null)
     {
-        if (saved.Laptop is byte b) LaptopSet(b);
-        EachExternal((key, h) => { if (saved.External.TryGetValue(key, out var v)) SetMonitorBrightness(h, v); });
+        byte? lap = null;
+        if (!keepLaptop && saved.Laptop is byte b) { LaptopSet(b); saved.Laptop = null; lap = b; }
+        EachExternal((screen, key, h) =>
+        {
+            if (keep?.Contains(screen) == true || !saved.External.TryGetValue(key, out var v)) return;
+            SetMonitorBrightness(h, v);
+            saved.External.Remove(key);
+            saved.Scale.Remove(screen);
+        });
+        return lap;
     }
 
     /// Current and max level of every DDC/CI monitor that answers, for the self-test.
     public static List<(uint Cur, uint Max)> ExternalLevels()
     {
         var l = new List<(uint, uint)>();
-        EachExternal((_, h) => { if (GetMonitorBrightness(h, out var _min, out var c, out var m)) l.Add((c, m)); });
+        EachExternal((_, _, h) => { if (GetMonitorBrightness(h, out var _min, out var c, out var m)) l.Add((c, m)); });
         return l;
     }
 
     // DDC/CI. Keyed by the monitor's hardware ID (MONITOR\GSM5B7F\{...}\0001) so restores survive re-enumeration.
     // Monitors without DDC/CI just fail GetMonitorBrightness and are skipped.
-    static void EachExternal(Action<string, IntPtr> act)
+    static void EachExternal(Action<string, string, IntPtr> act)
     {
         foreach (var s in Screen.AllScreens)
         {
@@ -180,10 +193,41 @@ public static class Backlight
             {
                 var dd = new DisplayDevice { cb = (uint)Marshal.SizeOf<DisplayDevice>() };
                 var id = EnumDisplayDevices(s.DeviceName, i, ref dd, 0) ? dd.DeviceID : $"{s.DeviceName}/{i}";
-                act($"{id}|{mons[i].Desc}", mons[i].Handle);
+                act(s.DeviceName, $"{id}|{mons[i].Desc}", mons[i].Handle);
             }
             DestroyPhysicalMonitors(n, mons);
         }
+    }
+
+    public record Monitor(string Device, string Key, string Name, bool Laptop);
+
+    /// Screens the user can pick: laptop first, then the others. Key is the monitor's hardware ID, so settings follow it.
+    public static List<Monitor> Monitors(string? laptop)
+    {
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var q = new ManagementObjectSearcher(new ManagementScope(@"root\wmi"), new SelectQuery("WmiMonitorID"));
+            foreach (ManagementObject o in q.Get())
+            {
+                var hw = ((string)o["InstanceName"]).Split('\\').ElementAtOrDefault(1);
+                var n = new string(((ushort[])o["UserFriendlyName"] ?? []).TakeWhile(c => c != 0).Select(c => (char)c).ToArray()).Trim();
+                if (!string.IsNullOrEmpty(hw) && n.Length > 0) names[hw] = n;
+            }
+        }
+        catch (Exception) { } // no WMI names: fall back to "Display n"
+        var list = new List<Monitor>();
+        var i = 1;
+        foreach (var s in Screen.AllScreens.OrderByDescending(s => s.DeviceName == laptop).ThenByDescending(s => s.Primary))
+        {
+            var dd = new DisplayDevice { cb = (uint)Marshal.SizeOf<DisplayDevice>() };
+            var id = EnumDisplayDevices(s.DeviceName, 0, ref dd, 0) && dd.DeviceID.Length > 0 ? dd.DeviceID : s.DeviceName;
+            var isLaptop = s.DeviceName == laptop;
+            var name = isLaptop ? "Laptop screen" : names.GetValueOrDefault(id.Split('\\').ElementAtOrDefault(1) ?? "") ?? $"Display {i}";
+            list.Add(new(s.DeviceName, id, name, isLaptop));
+            i++;
+        }
+        return list;
     }
 
     /// The screen (\\.\DISPLAYn) that is the laptop panel: its monitor ID matches the WMI brightness instance.

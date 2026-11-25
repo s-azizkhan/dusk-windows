@@ -17,6 +17,9 @@ public class Settings
     public int StartHour { get; set; } = 20;
     public int EndHour { get; set; } = 7;
     public SavedBacklight? Pinned { get; set; } // non-null while backlights are held at 100%
+    /// Per-screen warmth, brightness and on/off, keyed by monitor hardware ID. Missing values fall back to Kelvin/Brightness.
+    public Dictionary<string, ScreenLook> Screens { get; set; } = new();
+    public string Selected { get; set; } = "all";
 
     public static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Dusk");
     static readonly string File_ = Path.Combine(Dir, "settings.json");
@@ -35,6 +38,11 @@ public class Settings
         s.Brightness = Math.Clamp(s.Brightness, 0.05, 1);
         s.StartHour = Math.Clamp(s.StartHour, 0, 23);
         s.EndHour = Math.Clamp(s.EndHour, 0, 23);
+        foreach (var l in s.Screens.Values)
+        {
+            if (l.Kelvin is double k) l.Kelvin = Math.Clamp(k, 500, 6500);
+            if (l.Brightness is double b2) l.Brightness = Math.Clamp(b2, 0.05, 1);
+        }
         s.last = fresh ? "" : JsonSerializer.Serialize(s); // fresh: save once so the seed isn't re-read from a pinned backlight
         return s;
     }
@@ -56,6 +64,13 @@ public class Settings
         catch (UnauthorizedAccessException) { }
         return false;
     }
+}
+
+public class ScreenLook
+{
+    public double? Kelvin { get; set; }
+    public double? Brightness { get; set; }
+    public bool On { get; set; } = true;
 }
 
 static class Startup
@@ -128,7 +143,12 @@ static class Program
 
         wasEnabled = S.Enabled; // no show on launch, only when the user switches
         // Dusk's brightness is the laptop screen's real brightness: start from it if it was left lower.
-        if (Backlight.LaptopGet() is byte lb) { lastHW = lb / 100.0; shown.Dim = lastHW; if (lb < 99) S.Brightness = Math.Max(lb / 100.0, 0.05); }
+        RefreshScreens();
+        if (Backlight.LaptopGet() is byte lb)
+        {
+            lastHW = lb / 100.0;
+            if (lb < 99) { var v = Math.Max(lb / 100.0, 0.05); if (Laptop is { } m) L(m.Key).Brightness = v; else S.Brightness = v; }
+        }
         Backlight.WatchLaptop(l => app.Dispatcher.BeginInvoke(() => OnBacklightChanged(l)));
         Apply();
         if (args.Contains("--open") || args.Contains("--settings")) panel.Toggle(); // lets CI screenshot the panel
@@ -142,50 +162,138 @@ static class Program
         return S.StartHour <= S.EndHour ? h >= S.StartHour && h < S.EndHour : h >= S.StartHour || h < S.EndHour;
     }
 
-    // Dim = brightness of the laptop screen: backlight x gamma. Other screens get the gamma part only.
-    static (double K, double Dim, double Ext) shown = (6500, 1, 1);
-    static bool wasActive, wasEnabled;
+    // Per screen: warmth and total brightness. On the laptop screen Dim = backlight x gamma; elsewhere gamma only.
+    static Dictionary<string, (double K, double Dim)> shown = new();
+    static Dictionary<string, bool> wasActive = new();
+    static bool wasEnabled;
     static System.Windows.Threading.DispatcherTimer? anim;
     static readonly bool hasLaptop = Backlight.LaptopGet() is not null;
     static double lastHW = 1; // laptop backlight Dusk last set or saw, 0..1
     static string? laptopScreen;
+    static HashSet<string> pinned = new(); // screens (\\.\DISPLAYn) Dusk holds at 100%
     static double pendingDelta;
     static System.Windows.Threading.DispatcherTimer? follow;
     const double MinBacklight = 0.1; // below this Dusk dims in software, so it can go darker than the hardware
 
+    public static List<Backlight.Monitor> Screens = new();
+    static Backlight.Monitor? Laptop => Screens.FirstOrDefault(m => m.Laptop);
+
+    static ScreenLook L(string key) => S.Screens.TryGetValue(key, out var l) ? l : S.Screens[key] = new();
+    public static (double K, double B) Look(string key) => S.Screens.TryGetValue(key, out var l) ? (l.Kelvin ?? S.Kelvin, l.Brightness ?? S.Brightness) : (S.Kelvin, S.Brightness);
+    public static bool On(string key) => !S.Screens.TryGetValue(key, out var l) || l.On;
+    static double LaptopB => Laptop is { } m ? Look(m.Key).B : S.Brightness;
+
+    /// What the panel shows: the picked screen, or the first one for "All screens".
+    public static (double K, double B) Cur => Look(S.Selected == "all" ? Screens.FirstOrDefault()?.Key ?? "" : S.Selected);
+
+    public static void SetKelvin(double k) => SetField(l => l.Kelvin = k, () => S.Kelvin = k);
+    public static void SetBrightness(double b) => SetField(l => l.Brightness = Math.Clamp(b, 0.05, 1), () => S.Brightness = Math.Clamp(b, 0.05, 1));
+
+    static void SetField(Action<ScreenLook> one, Action shared)
+    {
+        if (S.Selected == "all") { shared(); foreach (var m in Screens) one(L(m.Key)); }
+        else one(L(S.Selected));
+        Apply();
+    }
+
+    /// On/off for the picked screen, or every screen for "All screens".
+    public static bool Power
+    {
+        get => S.Selected == "all" ? S.Enabled && (Screens.Count == 0 || Screens.Any(m => On(m.Key))) : S.Enabled && On(S.Selected);
+        set
+        {
+            if (S.Selected == "all")
+            {
+                if (value) foreach (var m in Screens) L(m.Key).On = true;
+                S.Enabled = value;
+            }
+            else
+            {
+                if (value && !S.Enabled) foreach (var m in Screens) L(m.Key).On = m.Key == S.Selected; // master was off: just this one
+                L(S.Selected).On = value;
+                if (value) S.Enabled = true;
+                else if (!Screens.Any(m => On(m.Key))) S.Enabled = false;
+            }
+            Apply();
+        }
+    }
+
+    static void RefreshScreens()
+    {
+        laptopScreen = Backlight.LaptopScreen();
+        Screens = Backlight.Monitors(laptopScreen);
+        if (S.Selected != "all" && (Screens.Count < 2 || Screens.All(m => m.Key != S.Selected))) S.Selected = "all";
+    }
+
     public static void Apply(bool repin = false)
     {
-        var active = S.Enabled && (!S.ScheduleOn || InNight());
-        if (S.Enabled != wasEnabled) { wasEnabled = S.Enabled; ScreenSundown.Play(S.Enabled); panel.PlaySundown(S.Enabled); }
-        var animate = active != wasActive || anim is not null;
-        wasActive = active;
+        if (repin || Screens.Count == 0) RefreshScreens();
+        var live = S.Enabled && (!S.ScheduleOn || InNight());
+        bool Act(Backlight.Monitor m) => live && On(m.Key);
+        var now = Screens.ToDictionary(m => m.Device, Act);
+        var changed = Screens.Where(m => !wasActive.TryGetValue(m.Device, out var w) ? now[m.Device] : w != now[m.Device]).ToList();
+        if (S.Enabled != wasEnabled || changed.Count > 0)
+        {
+            var on = changed.Count > 0 ? now[changed[0].Device] : S.Enabled;
+            if (S.Enabled != wasEnabled || wasActive.Count > 0) { ScreenSundown.Play(on, changed.Count > 0 ? changed.Select(m => m.Device).ToHashSet() : null); panel.PlaySundown(on); }
+            wasEnabled = S.Enabled;
+        }
+        var animate = changed.Count > 0 || anim is not null;
+        wasActive = now;
         anim?.Stop(); anim = null;
-        var pin = S.FlickerFree && active;
-        var target = (K: active ? S.Kelvin : 6500.0, Dim: active ? S.Brightness : hasLaptop ? Math.Max(S.Brightness, MinBacklight) : 1, Ext: active ? S.Brightness : 1);
+        var active = now.Values.Any(v => v);
+        var pin = S.FlickerFree ? Screens.Where(Act).Select(m => m.Device).ToHashSet() : new HashSet<string>();
+        var lap = Laptop;
+
+        (double K, double Dim) Target(string device)
+        {
+            var m = Screens.FirstOrDefault(x => x.Device == device);
+            if (m is null) return (6500, 1);
+            var (k, b) = Look(m.Key);
+            if (!now[device]) return (6500, m.Laptop ? Math.Max(LaptopB, MinBacklight) : 1);
+            // External held at 100% over DDC: gamma also carries the level it was at, so nothing jumps brighter.
+            var scale = !m.Laptop && pinned.Contains(device) && S.Pinned?.Scale.TryGetValue(device, out var sc) == true ? sc : 1;
+            return (k, b * scale);
+        }
+        var target = Screens.ToDictionary(m => m.Device, m => Target(m.Device));
+        (double K, double Dim) T(string d) => target.TryGetValue(d, out var t) ? t : (6500, 1);
 
         void Finish()
         {
-            if (repin || laptopScreen is null) laptopScreen = Backlight.LaptopScreen();
-            if (pin)
+            var lapPin = lap is not null && pin.Contains(lap.Device);
+            double Hw() => lap is null ? 1 : lapPin ? 1 : Math.Max(T(lap.Device).Dim, MinBacklight);
+            (double, double) G(string d) => lap is not null && d == lap.Device ? (T(d).K, T(d).Dim / Hw()) : T(d);
+
+            // Give back screens no longer held.
+            if (S.Pinned is { } p && (!pinned.SetEquals(pin) || (p.Laptop is not null && !lapPin)))
             {
-                // Flicker-free: dim everything in gamma first, then hold backlights at 100%, so it never flashes brighter.
-                GammaOK = Gamma.Apply(target.K, target.Ext, target.Dim, laptopScreen); gammaTouched = true;
-                if (GammaOK && (S.Pinned is null || repin || lastHW < 0.99))
+                if (Backlight.Restore(p, keepLaptop: lapPin, keep: pin) is byte rl) lastHW = rl / 100.0;
+                pinned.IntersectWith(pin);
+                if (p.Laptop is null && p.External.Count == 0) S.Pinned = null;
+            }
+            if (lap is not null && !lapPin && Hw() < lastHW) SetLaptop(Hw()); // going darker: backlight first, never flashes brighter
+            GammaOK = Gamma.Apply(G); gammaTouched = true;
+            if (pin.Count > 0 && !GammaOK && S.Pinned is { } p2)
+            {
+                // Gamma didn't take: holding 100% would make the screen brighter. Give everything back.
+                if (Backlight.Restore(p2) is byte rl) lastHW = rl / 100.0;
+                S.Pinned = null; pinned.Clear(); lapPin = false;
+                GammaOK = Gamma.Apply(G);
+            }
+            else if (pin.Count > 0 && GammaOK && (!pinned.SetEquals(pin) || repin || (lapPin && lastHW < 0.99)))
+            {
+                S.Pinned ??= new();
+                if (S.Save())
                 {
-                    S.Pinned ??= new();
-                    if (S.Save()) { Backlight.Pin(S.Pinned); lastHW = 1; } // pin only once the restore info is on disk
-                    else S.Pinned = null;
+                    Backlight.Pin(S.Pinned, lapPin, pin); // pin only once the restore info is on disk
+                    if (lapPin) lastHW = 1;
+                    var newScale = pin.Except(pinned).Any();
+                    pinned = new(pin);
+                    if (newScale) { target = Screens.ToDictionary(m => m.Device, m => Target(m.Device)); Gamma.Apply(G); }
                 }
+                else S.Pinned = null;
             }
-            if (!pin || !GammaOK || S.Pinned is null)
-            {
-                // Laptop backlight does the work down to its floor; gamma does the rest and dims other screens.
-                var hw = hasLaptop ? Math.Max(target.Dim, MinBacklight) : 1;
-                if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; lastHW = p.Laptop is byte l ? l / 100.0 : lastHW; }
-                if (hasLaptop && hw < lastHW) SetLaptop(hw); // going darker: backlight first, so it never flashes brighter
-                GammaOK = Gamma.Apply(target.K, target.Ext, target.Dim / hw, laptopScreen); gammaTouched = true;
-                if (hasLaptop) SetLaptop(hw);
-            }
+            if (lap is not null && !lapPin) SetLaptop(Hw());
             if (!active) { if (gammaTouched) Gamma.Reset(); gammaTouched = false; GammaOK = true; }
             shown = target;
             UpdateTray();
@@ -197,7 +305,7 @@ static class Program
 
         // Sunset on, sunrise off: ease warmth (in mireds, so it looks even) and dim with the curtain.
         // Frames touch gamma only; the backlight (slow WMI) moves once, at the end.
-        var from = shown;
+        var from = new Dictionary<string, (double K, double Dim)>(shown);
         var start = DateTime.UtcNow;
         anim = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         anim.Tick += (_, _) =>
@@ -205,9 +313,15 @@ static class Program
             var x = Math.Min((DateTime.UtcNow - start).TotalSeconds / SundownScene.Duration, 1);
             if (x >= 1) { anim?.Stop(); anim = null; Finish(); return; }
             var e = x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2;
-            var m = 1e6 / from.K + (1e6 / target.K - 1e6 / from.K) * e;
-            shown = (1e6 / m, from.Dim + (target.Dim - from.Dim) * e, from.Ext + (target.Ext - from.Ext) * e);
-            Gamma.Set(shown.K, shown.Ext, Math.Min(shown.Dim / lastHW, 1), laptopScreen);
+            var frame = new Dictionary<string, (double K, double Dim)>();
+            foreach (var (d, to) in target)
+            {
+                var a = from.TryGetValue(d, out var f) ? f : (K: 6500.0, Dim: lap is not null && d == lap.Device ? lastHW : 1);
+                var m = 1e6 / a.K + (1e6 / to.K - 1e6 / a.K) * e;
+                frame[d] = (1e6 / m, a.Dim + (to.Dim - a.Dim) * e);
+            }
+            shown = frame;
+            Gamma.Set(d => frame.TryGetValue(d, out var v) ? (v.K, lap is not null && d == lap.Device ? Math.Min(v.Dim / lastHW, 1) : v.Dim) : (6500, 1));
             gammaTouched = true;
         };
         anim.Start();
@@ -241,7 +355,8 @@ static class Program
     static void Follow(object? s, EventArgs e)
     {
         follow!.Stop();
-        S.Brightness = Math.Clamp(S.Brightness + pendingDelta, 0.05, 1);
+        var nb = Math.Clamp(LaptopB + pendingDelta, 0.05, 1);
+        if (Laptop is { } m) L(m.Key).Brightness = nb; else S.Brightness = nb;
         pendingDelta = 0;
         Apply(repin: true);
     }
@@ -253,7 +368,7 @@ static class Program
     {
         Apply(repin: true);
         if (!S.FlickerFree) return (Health.Off, "Flicker-free is off. At low brightness many screens dim by pulsing the backlight on and off very fast (PWM), which some eyes feel.");
-        if (!(S.Enabled && (!S.ScheduleOn || InNight()))) return (Health.Off, "Dusk is paused right now, so the backlight is back in your hands.");
+        if (!(S.Enabled && (!S.ScheduleOn || InNight())) || !Screens.Any(m => On(m.Key))) return (Health.Off, "Dusk is paused right now, so the backlight is back in your hands.");
         if (!GammaOK) return (Health.Warn, "Windows or your display driver didn't accept the full colour change, so Dusk left the backlight alone to keep the screen from getting brighter.");
         var levels = new List<double>();
         if (Backlight.LaptopGet() is byte b) levels.Add(b / 100.0);
@@ -261,20 +376,20 @@ static class Program
         if (levels.Count == 0) return (Health.Warn, "No adjustable backlight found. Flicker-free needs a laptop screen, or a monitor with DDC/CI turned on in its own menu.");
         var low = levels.Min();
         if (low < 0.99) return (Health.Warn, $"A backlight is at {low * 100:0}%, not 100%. Turn off \"Change brightness automatically\" in Settings > System > Display.");
-        return (Health.Ok, $"Working. The backlight is held at 100%, so it doesn't pulse, and Dusk dims the picture to {S.Brightness * 100:0}% instead.");
+        return (Health.Ok, $"Working. The backlight is held at 100%, so it doesn't pulse, and Dusk dims the picture instead.");
     }
 
     static void Restore()
     {
         anim?.Stop(); anim = null;
-        if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; S.Save(); }
+        if (S.Pinned is { } p) { Backlight.Restore(p); S.Pinned = null; pinned.Clear(); S.Save(); }
         if (gammaTouched) Gamma.Reset();
         gammaTouched = false;
     }
 
     static void UpdateTray()
     {
-        tray.Text = !S.Enabled ? "Dusk: off" : $"Dusk: {S.Kelvin:0}K, {S.Brightness * 100:0}%";
+        tray.Text = !S.Enabled ? "Dusk: off" : $"Dusk: {Cur.K:0}K, {Cur.B * 100:0}%";
         if (trayOn == S.Enabled) return;
         trayOn = S.Enabled;
         var old = tray.Icon;
@@ -327,7 +442,7 @@ static class Program
             m.Items.Add(new ToolStripMenuItem("On", null, (_, _) => { S.Enabled = !S.Enabled; Apply(); }) { Checked = S.Enabled });
             m.Items.Add(new ToolStripSeparator());
             foreach (var (name, k) in Presets)
-                m.Items.Add(new ToolStripMenuItem($"{name}  {k}K", null, (_, _) => { S.Kelvin = k; S.Enabled = true; Apply(); }) { Checked = S.Kelvin == k });
+                m.Items.Add(new ToolStripMenuItem($"{name}  {k}K", null, (_, _) => { S.Enabled = true; SetKelvin(k); }) { Checked = Cur.K == k });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Quit Dusk", null, (_, _) => System.Windows.Application.Current.Shutdown());
         };

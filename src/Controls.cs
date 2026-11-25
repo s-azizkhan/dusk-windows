@@ -346,6 +346,23 @@ sealed class WarmthDial : Grid
         if (k != kelvin) KelvinChanged?.Invoke(k);
     }
 
+    double wheel;
+    /// Mouse wheel or touchpad scroll: 100 K a notch, up = warmer.
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        e.Handled = true;
+        if (!enabled) return;
+        wheel += e.Delta / 120.0;
+        var n = Math.Truncate(wheel);
+        if (n == 0) return;
+        wheel -= n;
+        var k = Math.Clamp(kelvin - n * 100, Lo, Hi);
+        if (k == kelvin) return;
+        Sound.Tick(P(k));
+        shown.To(P(k));
+        KelvinChanged?.Invoke(k);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         var k = e.Key switch { Key.Up or Key.Right => Math.Max(kelvin - 300, Lo), Key.Down or Key.Left => Math.Min(kelvin + 300, Hi), _ => kelvin };
@@ -444,6 +461,18 @@ sealed class BrightnessBars : Grid
         }
         var v = (k + 1) / (double)N;
         if (Math.Abs(v - value) > 0.001) Changed?.Invoke(v);
+    }
+
+    double wheel;
+    /// Mouse wheel or touchpad scroll: one bar a notch, up = brighter.
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        e.Handled = true;
+        wheel += e.Delta / 120.0;
+        var n = (int)Math.Truncate(wheel);
+        if (n == 0) return;
+        wheel -= n;
+        Step(Lit - 1 + n);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

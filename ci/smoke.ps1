@@ -30,6 +30,7 @@ using System; using System.Runtime.InteropServices; using System.Threading;
 public static class M {
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] static extern void mouse_event(uint f, int x, int y, uint d, UIntPtr e);
+  public static void Wheel(int x, int y, int notches) { SetCursorPos(x, y); Thread.Sleep(150); for (var i = 0; i < Math.Abs(notches); i++) { mouse_event(0x800, 0, 0, (uint)(120 * Math.Sign(notches)), UIntPtr.Zero); Thread.Sleep(120); } Thread.Sleep(400); }
   public static void Click(int x, int y) { SetCursorPos(x, y); Thread.Sleep(120); mouse_event(2, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80); mouse_event(4, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(400); }
 }
 '@
@@ -127,6 +128,14 @@ $p = Fresh; [M]::Click(854, 344); Start-Sleep 1
 Check 'click dial center toggles off' ((Saved).Enabled -eq $false); Stop $p
 $p = Fresh; [M]::Click(931, 203); Start-Sleep 1; [M]::Click(962, 498); Start-Sleep 1
 Check 'settings page: Sounds switch turns sounds off' ((Saved).Sounds -eq $false); Shot 'after-sounds'; Stop $p
+
+$p = Fresh; [M]::Wheel(854, 344, 3); Start-Sleep 1
+$k = (Saved).Kelvin; Check "wheel up 3 notches on dial warms to 3100K (got $k)" ($k -eq 3100); Stop $p
+$p = Fresh; [M]::Wheel(839, 535, -2); Start-Sleep 1
+$b = (Saved).Brightness; Check "wheel down 2 notches on bars dims to 90% (got $b)" ([Math]::Abs($b - 0.9) -lt 0.001); Stop $p
+Seed '{"Enabled":true,"Kelvin":3400,"Brightness":1,"Selected":"MONITOR\\NOPE\\0001"}'
+$p = Launch @('--open'); Start-Sleep 1
+Check 'one screen: unknown picked screen falls back to all' ((Saved).Selected -eq 'all'); NoErrors 'picker'; Stop $p
 
 Info 'gamma at end' ([G]::Read())
 if ($script:fail) { throw 'Smoke test failed' }

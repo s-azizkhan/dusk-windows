@@ -191,11 +191,11 @@ static class ScreenSundown
 
     static List<Window> windows = new();
 
-    public static void Play(bool on)
+    public static void Play(bool on, ISet<string>? only = null)
     {
         if (!SystemParameters.ClientAreaAnimation) return; // Windows "Animation effects" off: skip the show
         foreach (var w in windows) w.Close();
-        windows = System.Windows.Forms.Screen.AllScreens.Select(s =>
+        windows = System.Windows.Forms.Screen.AllScreens.Where(s => only?.Contains(s.DeviceName) != false).Select(s =>
         {
             var scene = new SundownScene(on);
             var w = new Window
